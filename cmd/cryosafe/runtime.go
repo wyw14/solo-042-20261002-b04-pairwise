@@ -27,7 +27,6 @@ import (
 type runtime struct {
 	server       *http.Server
 	retryQueue   *notify.RetryQueue
-	dispatcher   *notify.Dispatcher
 	alarmService *alarm.Service
 }
 
@@ -213,7 +212,7 @@ func buildRuntime(cfg config, now func() time.Time) (*runtime, error) {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	return &runtime{server: server, retryQueue: retryQueue, dispatcher: dispatcher, alarmService: alarmService}, nil
+	return &runtime{server: server, retryQueue: retryQueue, alarmService: alarmService}, nil
 }
 
 func (r *runtime) run(ctx context.Context) error {
@@ -235,7 +234,7 @@ func (r *runtime) run(ctx context.Context) error {
 			}
 			return err
 		case <-ticker.C:
-			_ = r.retryQueue.RunDue(ctx, r.dispatcher)
+			_ = r.retryQueue.RunDue(ctx, r.alarmService.RetryDelivery)
 			if pending := len(r.retryQueue.Pending()); pending > 0 {
 				slog.Warn("alarm notifications awaiting retry", "count", pending)
 			}

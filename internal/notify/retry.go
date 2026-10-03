@@ -15,6 +15,12 @@ type RetryItem struct {
 	Attempts    int
 }
 
+// AttemptFunc performs a single redelivery attempt for a queued alarm and
+// returns the updated alarm. A nil error removes the alarm from the queue;
+// a non-nil error reschedules it with the updated alarm kept, so channels
+// that already succeeded are not sent again on the next attempt.
+type AttemptFunc func(context.Context, model.Alarm) (model.Alarm, error)
+
 type RetryQueue struct {
 	mu       sync.Mutex
 	items    map[uuid.UUID]RetryItem
@@ -35,7 +41,15 @@ func (q *RetryQueue) Schedule(alarm model.Alarm) {
 	q.items[alarm.ID] = RetryItem{Alarm: alarm, NextAttempt: q.now().Add(q.interval).UTC()}
 }
 
-func (q *RetryQueue) RunDue(ctx context.Context, dispatcher *Dispatcher) []error {
+// Cancel drops a pending retry, e.g. when the alarm was acknowledged or
+// cleared while waiting for its next attempt.
+func (q *RetryQueue) Cancel(id uuid.UUID) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.items, id)
+}
+
+func (q *RetryQueue) RunDue(ctx context.Context, attempt AttemptFunc) []error {
 	q.mu.Lock()
 	due := make([]RetryItem, 0)
 	for _, item := range q.items {
@@ -46,8 +60,10 @@ func (q *RetryQueue) RunDue(ctx context.Context, dispatcher *Dispatcher) []error
 	q.mu.Unlock()
 	errorsFound := make([]error, 0)
 	for _, item := range due {
-		results, err := dispatcher.Retry(ctx, item.Alarm, item.Alarm.Channels)
-		item.Alarm = item.Alarm.WithChannels(results, q.now())
+		updated, err := attempt(ctx, item.Alarm)
+		if updated.ID != uuid.Nil {
+			item.Alarm = updated
+		}
 		q.mu.Lock()
 		if err == nil {
 			delete(q.items, item.Alarm.ID)

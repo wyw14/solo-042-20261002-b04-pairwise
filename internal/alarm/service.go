@@ -35,7 +35,9 @@ func (s *Service) Raise(ctx context.Context, vesselID string, kind model.AlarmKi
 	s.mu.Unlock()
 	delivered, err := s.delivery.Deliver(ctx, alarm)
 	s.mu.Lock()
-	s.alarms[alarm.ID] = delivered
+	if delivered.ID != uuid.Nil {
+		s.alarms[alarm.ID] = delivered
+	}
 	s.mu.Unlock()
 	return delivered, err
 }
@@ -64,26 +66,57 @@ func (s *Service) List() []model.Alarm {
 	return result
 }
 
+// RetryDelivery performs one scheduled redelivery attempt and closes the
+// loop: the merged outcome is stored in memory and journaled. Alarms that
+// were acknowledged or cleared while queued are left untouched and returned
+// with a nil error so the caller drops them from the retry queue.
+func (s *Service) RetryDelivery(ctx context.Context, queued model.Alarm) (model.Alarm, error) {
+	s.mu.RLock()
+	current, ok := s.alarms[queued.ID]
+	s.mu.RUnlock()
+	if ok && (current.State == model.AlarmAcknowledged || current.State == model.AlarmCleared) {
+		return current, nil
+	}
+	redelivered, dispatchErr := s.delivery.Redeliver(ctx, queued)
+	s.mu.Lock()
+	if latest, exists := s.alarms[redelivered.ID]; exists &&
+		(latest.State == model.AlarmAcknowledged || latest.State == model.AlarmCleared) {
+		// Acknowledged or cleared while the attempt was in flight: keep the
+		// operator-visible state, retain the fresh channel results.
+		redelivered.State = latest.State
+	}
+	s.alarms[redelivered.ID] = redelivered
+	s.mu.Unlock()
+	if err := s.delivery.Record(redelivered); err != nil {
+		return redelivered, err
+	}
+	return redelivered, dispatchErr
+}
+
 func (s *Service) Acknowledge(id uuid.UUID) (model.Alarm, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	alarm, ok := s.alarms[id]
 	if !ok {
+		s.mu.Unlock()
 		return model.Alarm{}, errors.New("alarm not found")
 	}
 	alarm = alarm.Acknowledge(s.now())
 	s.alarms[id] = alarm
+	s.mu.Unlock()
+	s.delivery.CancelRetries(id)
 	return alarm, nil
 }
 
 func (s *Service) Clear(id uuid.UUID) (model.Alarm, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	alarm, ok := s.alarms[id]
 	if !ok {
+		s.mu.Unlock()
 		return model.Alarm{}, errors.New("alarm not found")
 	}
 	alarm = alarm.Clear(s.now())
 	s.alarms[id] = alarm
+	s.mu.Unlock()
+	s.delivery.CancelRetries(id)
 	return alarm, nil
 }
