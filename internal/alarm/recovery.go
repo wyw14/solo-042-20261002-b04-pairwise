@@ -21,9 +21,18 @@ func (r *Recovery) Restore() error {
 	if err != nil {
 		return err
 	}
+	// Fold the event stream in order: later retry/acknowledge/clear events
+	// override the initial delivery snapshot, so a successful retry survives a
+	// restart and a resolved alarm is not rescheduled.
+	alarmKinds := map[string]bool{
+		model.EventAlarmDelivery:      true,
+		model.EventAlarmDeliveryRetry: true,
+		model.EventAlarmAcknowledged:  true,
+		model.EventAlarmCleared:       true,
+	}
 	latest := make(map[string]model.Alarm)
 	for _, event := range events {
-		if event.Kind != "alarm.delivery" {
+		if !alarmKinds[event.Kind] {
 			continue
 		}
 		var alarm model.Alarm

@@ -27,6 +27,14 @@ const (
 	AlarmCleared      AlarmState = "cleared"
 )
 
+// Alarm lifecycle event kinds persisted to the alarms journal partition.
+const (
+	EventAlarmDelivery      = "alarm.delivery"
+	EventAlarmDeliveryRetry = "alarm.delivery.retry"
+	EventAlarmAcknowledged  = "alarm.acknowledged"
+	EventAlarmCleared       = "alarm.cleared"
+)
+
 type ChannelResult struct {
 	Channel   string    `json:"channel"`
 	Required  bool      `json:"required"`
@@ -78,6 +86,12 @@ func (a Alarm) WithChannels(results []ChannelResult, now time.Time) Alarm {
 	}
 	a.UpdatedAt = now.UTC()
 	return a
+}
+
+// Resolved reports whether the alarm reached a user-driven terminal state
+// (acknowledged or cleared), after which delivery must not reorder the state.
+func (a Alarm) Resolved() bool {
+	return a.State == AlarmAcknowledged || a.State == AlarmCleared
 }
 
 func (a Alarm) Acknowledge(now time.Time) Alarm {

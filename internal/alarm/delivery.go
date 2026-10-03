@@ -38,7 +38,7 @@ func (s *DeliveryService) Deliver(ctx context.Context, alarm model.Alarm) (model
 	alarm.State = model.AlarmDispatching
 	results, dispatchErr := s.dispatcher.Dispatch(ctx, alarm)
 	alarm = alarm.WithChannels(results, s.now())
-	event, err := model.NewEvent("alarms", "alarm.delivery", alarm.ID.String(), alarm, s.now())
+	event, err := model.NewEvent("alarms", model.EventAlarmDelivery, alarm.ID.String(), alarm, s.now())
 	if err != nil {
 		return model.Alarm{}, err
 	}

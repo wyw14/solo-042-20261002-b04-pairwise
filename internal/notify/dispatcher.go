@@ -77,11 +77,13 @@ func (d *Dispatcher) Retry(ctx context.Context, alarm model.Alarm, previous []mo
 	var firstErr error
 	for index, previousResult := range previous {
 		if previousResult.Delivered {
+			// Already delivered channels are never resent.
 			continue
 		}
 		channel := d.channels[previousResult.Channel]
 		if channel == nil {
-			if firstErr == nil {
+			results[index].Error = "notification channel no longer exists"
+			if previousResult.Required && firstErr == nil {
 				firstErr = errors.New("notification channel no longer exists")
 			}
 			continue
@@ -92,7 +94,9 @@ func (d *Dispatcher) Retry(ctx context.Context, alarm model.Alarm, previous []mo
 		results[index].Error = ""
 		if err != nil {
 			results[index].Error = err.Error()
-			if firstErr == nil {
+			// Only required-channel failures keep the alarm partial and the
+			// retry alive; a failed optional channel is recorded but terminal.
+			if channel.Required() && firstErr == nil {
 				firstErr = err
 			}
 		}

@@ -186,10 +186,20 @@ func buildRuntime(cfg config, now func() time.Time) (*runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	alarmService := alarm.NewService(delivery, now)
+	alarmService, err := alarm.NewService(delivery, store, now)
+	if err != nil {
+		return nil, err
+	}
+	// Close the retry loop: retry outcomes flow back into the authoritative
+	// alarm service and event log, and acknowledge/clear cancel pending sends.
+	retryQueue.SetSink(alarmService)
+	alarmService.SetRetryQueue(retryQueue)
 	if err := alarm.NewRecovery(store, alarmService).Restore(); err != nil {
 		return nil, err
 	}
+	// Re-arm retries for alarms whose delivery was still partial when the
+	// process last stopped; already delivered or resolved alarms are skipped.
+	alarmService.ReschedulePending(retryQueue)
 	suppressions := alarm.NewSuppressionService(store, now)
 	healthService := monitor.NewHealthService(ingestor, circuitHealth, probeMonitor, now)
 
